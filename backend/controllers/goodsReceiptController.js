@@ -1,147 +1,90 @@
 const GoodsReceipt = require('../models/GoodsReceipt');
 const PurchaseOrder = require('../models/PurchaseOrder');
 
-// Get all goods receipts
-exports.getAllGoodsReceipts = async (req, res) => {
-    try {
-        const goodsReceipts = await GoodsReceipt.find()
-            .populate('purchaseOrder')
-            .populate('supplier', 'name email')
-            .populate('receivedBy', 'name email')
-            .sort({ createdAt: -1 });
-
-        res.status(200).json({
-            success: true,
-            count: goodsReceipts.length,
-            data: goodsReceipts
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching goods receipts',
-            error: error.message
-        });
-    }
-};
-
-// Get single goods receipt
-exports.getGoodsReceipt = async (req, res) => {
-    try {
-        const goodsReceipt = await GoodsReceipt.findById(req.params.id)
-            .populate('purchaseOrder')
-            .populate('supplier')
-            .populate('receivedBy', 'name email');
-
-        if (!goodsReceipt) {
-            return res.status(404).json({
-                success: false,
-                message: 'Goods receipt not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            data: goodsReceipt
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error fetching goods receipt',
-            error: error.message
-        });
-    }
-};
-
-// Create goods receipt
+// @desc    Create goods receipt
+// @route   POST /api/goods-receipt
+// @access  Private
 exports.createGoodsReceipt = async (req, res) => {
-    try {
-        // Generate receipt number
-        const receiptCount = await GoodsReceipt.countDocuments();
-        const receiptNumber = `GR-${Date.now()}-${receiptCount + 1}`;
+  try {
+    const receiptData = {
+      ...req.body,
+      receivedBy: req.user.id
+    };
 
-        const goodsReceipt = await GoodsReceipt.create({
-            ...req.body,
-            receiptNumber,
-            receivedBy: req.user?._id
-        });
-
-        // Update purchase order status
-        const purchaseOrder = await PurchaseOrder.findById(req.body.purchaseOrder);
-        if (purchaseOrder) {
-            // Check if all items are received
-            const allReceived = req.body.items.every(
-                item => item.receivedQuantity >= item.orderedQuantity
-            );
-
-            purchaseOrder.status = allReceived ? 'Received' : 'Partially Received';
-            await purchaseOrder.save();
-        }
-
-        res.status(201).json({
-            success: true,
-            message: 'Goods receipt created successfully',
-            data: goodsReceipt
-        });
-    } catch (error) {
-        res.status(400).json({
-            success: false,
-            message: 'Error creating goods receipt',
-            error: error.message
-        });
+    const purchaseOrder = await PurchaseOrder.findById(receiptData.purchaseOrder);
+    if (!purchaseOrder) {
+      return res.status(400).json({
+        success: false,
+        error: 'Purchase order not found'
+      });
     }
+
+    // Update PO items received quantities
+    receiptData.items.forEach(item => {
+      const poItem = purchaseOrder.items.find(i => i.partCode === item.partCode);
+      if (poItem) {
+        poItem.quantity.received += item.quantityReceived;
+        poItem.quantity.remaining = poItem.quantity.ordered - poItem.quantity.received;
+      }
+    });
+
+    // Check if PO is fully received
+    const allReceived = purchaseOrder.items.every(
+      item => item.quantity.received >= item.quantity.ordered
+    );
+    
+    purchaseOrder.status = allReceived ? 'completed' : 'partially_received';
+    purchaseOrder.actualDeliveryDate = new Date();
+    await purchaseOrder.save();
+
+    const goodsReceipt = await GoodsReceipt.create(receiptData);
+
+    res.status(201).json({
+      success: true,
+      data: goodsReceipt
+    });
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
 };
 
-// Update goods receipt
-exports.updateGoodsReceipt = async (req, res) => {
-    try {
-        const goodsReceipt = await GoodsReceipt.findByIdAndUpdate(
-            req.params.id,
-            req.body,
-            { new: true, runValidators: true }
-        );
+// @desc    Get all goods receipts
+// @route   GET /api/goods-receipt
+// @access  Private
+exports.getGoodsReceipts = async (req, res) => {
+  try {
+    const { page = 1, limit = 10, purchaseOrder } = req.query;
 
-        if (!goodsReceipt) {
-            return res.status(404).json({
-                success: false,
-                message: 'Goods receipt not found'
-            });
-        }
+    const query = {};
+    if (purchaseOrder) query.purchaseOrder = purchaseOrder;
 
-        res.status(200).json({
-            success: true,
-            message: 'Goods receipt updated successfully',
-            data: goodsReceipt
-        });
-    } catch (error) {
-        res.status(400).json({
-            success: false,
-            message: 'Error updating goods receipt',
-            error: error.message
-        });
-    }
-};
+    const receipts = await GoodsReceipt.find(query)
+      .populate('purchaseOrder', 'poNumber')
+      .populate('supplier', 'companyName')
+      .populate('receivedBy', 'name')
+      .limit(limit * 1)
+      .skip((page - 1) * limit)
+      .sort({ createdAt: -1 });
 
-// Delete goods receipt
-exports.deleteGoodsReceipt = async (req, res) => {
-    try {
-        const goodsReceipt = await GoodsReceipt.findByIdAndDelete(req.params.id);
+    const total = await GoodsReceipt.countDocuments(query);
 
-        if (!goodsReceipt) {
-            return res.status(404).json({
-                success: false,
-                message: 'Goods receipt not found'
-            });
-        }
-
-        res.status(200).json({
-            success: true,
-            message: 'Goods receipt deleted successfully'
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: 'Error deleting goods receipt',
-            error: error.message
-        });
-    }
+    res.json({
+      success: true,
+      data: receipts,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 };
