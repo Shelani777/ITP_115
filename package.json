@@ -1,0 +1,16 @@
+{
+  "name": "millanium-werksatt",
+  "version": "1.0.0",
+  "description": "Millanium Werksatt Garage Management System",
+  "scripts": {
+    "start": "cd frontend && npm start",
+    "start:backend": "cd backend && npm start",
+    "build": "cd frontend && npm install && CI=false npm run build",
+    "install": "cd backend && npm install && cd ../frontend && npm install",
+    "vercel-build": "cd frontend && CI=false npm run build"
+  },
+  "private": true,
+  "dependencies": {
+    "axios": "^1.11.0"
+  }
+}
